@@ -1,0 +1,140 @@
+# =====================================================
+# Differential Expression and Pathway Analysis: OB (old vs. young)
+# =====================================================
+
+# -------------------------------
+# 1. Subset OB samples
+# -------------------------------
+
+# Extract only OB (olfactory bulb) samples from the main DGEList 'd'
+OB_dge <- d[, which(d$samples$group %in% c("oldOB", "youngOB"))]
+
+# -------------------------------
+# 2. Filter lowly expressed genes
+# -------------------------------
+
+# Remove genes that have very low expression across samples
+OB_keep <- filterByExpr(OB_dge, group = OB_dge$samples$group)
+OB_dge <- OB_dge[OB_keep, keep.lib.sizes = FALSE]
+
+# -------------------------------
+# 3. Normalize counts
+# -------------------------------
+
+# Recalculate library sizes (total read counts per sample)
+OB_dge$samples$lib.size <- colSums(OB_dge$counts)
+
+# Calculate normalization factors using the TMM method
+OB_dge <- calcNormFactors(OB_dge)
+
+# -------------------------------
+# 4. Design matrix setup
+# -------------------------------
+
+# Create a design matrix without intercept (~0 + group)
+# This creates separate model columns for "oldOB" and "youngOB"
+OB_design <- model.matrix(~ 0 + OB_dge$samples$group)
+colnames(OB_design) <- levels(OB_dge$samples$group)
+
+# -------------------------------
+# 5. Estimate dispersions
+# -------------------------------
+
+# Estimate tagwise dispersions (per-gene biological variability)
+OB_dge <- estimateGLMTagwiseDisp(OB_dge, OB_design)
+
+# -------------------------------
+# 6. PCA Visualization (DESeq2 transformation)
+# -------------------------------
+
+# Convert edgeR object to DESeq2 format for variance-stabilized PCA
+OB_dds <- DESeqDataSetFromMatrix(
+  countData = round(OB_dge$counts),
+  colData = OB_dge$samples,
+  design = ~ group
+)
+
+# Apply rlog transformation (regularized log) for PCA visualization
+OB_rlog <- rlog(OB_dds, blind = TRUE)
+
+# Compute PCA results and variance explained
+OB_pcaData <- plotPCA(OB_rlog, intgroup = c("group"), returnData = TRUE, ntop = 1000)
+OB_percentVar <- round(100 * attr(OB_pcaData, "percentVar"))
+
+# Save PCA plot as PDF
+pdf("PCA_Plot_OB.pdf", height = 8, width = 8)
+ggplot(OB_pcaData, aes(PC1, PC2, color = group)) +
+  geom_point(size = 4) +
+  xlab(paste0("PC1: ", OB_percentVar[1], "% variance")) +
+  ylab(paste0("PC2: ", OB_percentVar[2], "% variance")) +
+  coord_fixed() +
+  theme_minimal(base_size = 14) +
+  geom_text_repel(aes(label = name), size = 3)
+dev.off()
+
+# -------------------------------
+# 7. Differential Expression (exact test)
+# -------------------------------
+
+# Perform exact test comparing old vs. young OB
+OB_et <- exactTest(OB_dge, pair = c("youngOB", "oldOB"))
+
+# Summarize significant results using BH FDR correction
+OB_de <- decideTests.DGEExact(OB_et, adjust.method = "BH", p.value = 0.05)
+summary(OB_de)
+
+# Extract test results as data frame
+OB_table <- OB_et$table
+OB_table$gene <- rownames(OB_table)
+
+# -------------------------------
+# 8. Gene annotation with g:Profiler
+# -------------------------------
+
+# Convert gene IDs to Entrez IDs for mouse
+OB_gene_symbols <- gconvert(OB_table$gene, organism = "mmusculus", target = "ENTREZGENE", filter_na = FALSE)
+OB_gene_symbols <- na.omit(OB_gene_symbols[OB_gene_symbols$input %in% OB_table$gene, ])
+
+# Merge back with DE results
+OB_matched <- OB_table[OB_table$gene %in% OB_gene_symbols$input, ]
+OB_order_index <- match(OB_gene_symbols$input, OB_matched$gene)
+OB_sorted <- OB_matched[OB_order_index, ]
+OB_sorted$symbol <- OB_gene_symbols$target
+
+# -------------------------------
+# 9. Label up/down-regulated genes
+# -------------------------------
+
+OB_sorted$diffexpressed <- "Not-Significant"
+OB_sorted[OB_sorted$PValue < 0.05 & OB_sorted$logFC > 0, "diffexpressed"] <- "Up-Regulated"
+OB_sorted[OB_sorted$PValue < 0.05 & OB_sorted$logFC < 0, "diffexpressed"] <- "Down-Regulated"
+
+# -------------------------------
+# 10. KEGG enrichment analysis
+# -------------------------------
+
+# --- (a) Up-regulated genes ---
+OB_up_ids <- bitr(
+  OB_sorted[OB_sorted$PValue < 0.05 & OB_sorted$logFC > 0, ]$symbol,
+  fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Mm.eg.db"
+)
+
+OB_up_kegg <- enrichKEGG(gene = OB_up_ids$ENTREZID, organism = 'mmu', pvalueCutoff = 0.05)
+OB_up_kegg@result$Description <- sub(" - Mus musculus \\(house mouse\\)", "", OB_up_kegg@result$Description)
+
+pdf("Top_50_Up-Regulated_KEGG_Pathways_OB.pdf", height = 10, width = 8)
+dotplot(OB_up_kegg, showCategory = 50, font.size = 8)
+dev.off()
+
+# --- (b) Down-regulated genes ---
+OB_down_ids <- bitr(
+  OB_sorted[OB_sorted$PValue < 0.05 & OB_sorted$logFC < 0, ]$symbol,
+  fromType = "SYMBOL", toType = "ENTREZID", OrgDb = "org.Mm.eg.db"
+)
+
+OB_down_kegg <- enrichKEGG(gene = OB_down_ids$ENTREZID, organism = 'mmu', pvalueCutoff = 0.05)
+OB_down_kegg@result$Description <- sub(" - Mus musculus \\(house mouse\\)", "", OB_down_kegg@result$Description)
+
+pdf("Top_50_Down-Regulated_KEGG_Pathways_OB.pdf", height = 10, width = 8)
+dotplot(OB_down_kegg, showCategory = 50, font.size = 8)
+dev.off()
