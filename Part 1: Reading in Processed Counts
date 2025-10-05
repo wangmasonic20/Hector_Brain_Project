@@ -1,0 +1,59 @@
+# Load necessary libraries for differential expression and enrichment analysis
+library(edgeR)          # For normalization and differential expression using count data
+library(DESeq2)         # Alternative package for differential expression analysis
+library(gprofiler2)     # For functional enrichment analysis (GO, KEGG, etc.)
+library(clusterProfiler) # For advanced enrichment and pathway visualization
+library(ggplot2)        # For creating plots
+library(ggrepel)        # For improving label placement in ggplot2
+
+# -------------------------------
+# 1. Load and clean count data
+# -------------------------------
+
+# Read in the raw count matrix produced by featureCounts or Subread.
+# The file likely includes gene IDs and multiple sample columns.
+# The comment.char = "#" skips any header comment lines beginning with "#".
+counts <- read.delim("/users/3/ali00724/Hector Brain Project/subread_counts.trimmed.txt", comment.char = "#")
+
+# Remove unnecessary metadata columns (2–6) that might contain annotation info
+# (e.g., Chr, Start, End, Strand, Length), keeping only gene IDs and counts.
+counts.1 = counts[,-c(2,3,4,5,6)]
+
+# Set gene IDs as row names (each row corresponds to one gene)
+rownames(counts.1) = counts.1$Geneid
+
+# Remove the now-redundant 'Geneid' column since it’s stored as rownames
+counts.1 = counts.1[,-c(1)]
+
+# -------------------------------
+# 2. Define sample information
+# -------------------------------
+
+# Create a data frame describing each sample’s ID and experimental condition.
+# The condition vector uses rep() to repeat each brain region name for a specific number of samples.
+# This appears to include multiple groups like oldBST, oldCB, youngCTX, etc.
+samples = data.frame(
+  id = colnames(counts.1),
+  condition = c(
+    rep(c("oldBST", "oldCB", "oldCTX", "oldHIP", "oldMB", "oldOB", "oldTHA"), 12),
+    rep(c("youngBST", "youngCB", "youngCTX", "youngHIP", "youngMB", "youngOB", "youngTHA"), 15),
+    rep(c("oldBST", "oldCB", "oldCTX", "oldHIP", "oldMB", "oldOB", "oldTHA"), 8),
+    rep(c("youngBST", "youngCB", "youngCTX", "youngHIP", "youngMB", "youngOB", "youngTHA"), 5)
+  )
+)
+
+# Create a simpler vector of group labels matching the sample order
+Groups = c(
+  rep(c("oldBST", "oldCB", "oldCTX", "oldHIP", "oldMB", "oldOB", "oldTHA"), 12),
+  rep(c("youngBST", "youngCB", "youngCTX", "youngHIP", "youngMB", "youngOB", "youngTHA"), 15),
+  rep(c("oldBST", "oldCB", "oldCTX", "oldHIP", "oldMB", "oldOB", "oldTHA"), 8),
+  rep(c("youngBST", "youngCB", "youngCTX", "youngHIP", "youngMB", "youngOB", "youngTHA"), 5)
+)
+
+# -------------------------------
+# 3. Create DGEList object
+# -------------------------------
+
+# Create an edgeR DGEList object containing the count data and grouping info.
+# This is the first step in edgeR’s workflow before normalization and DE testing.
+d <- DGEList(counts = counts.1, group = factor(Groups))
